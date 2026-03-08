@@ -146,13 +146,13 @@ _X, _y = _generate_synthetic_data(900)
 _scaler = StandardScaler()
 _X_scaled = _scaler.fit_transform(_X)
 
-_model = GradientBoostingClassifier(
-    n_estimators=200, max_depth=4,
-    learning_rate=0.08, random_state=42
+_model = RandomForestClassifier(
+    n_estimators=200, max_depth=8,
+    min_samples_split=5, random_state=42, n_jobs=-1
 )
 _model.fit(_X_scaled, _y)
 
-# SHAP explainer
+# SHAP explainer — RandomForest multi-class supported
 _explainer = shap.TreeExplainer(_model)
 
 RISK_LABELS = {0: "Low Risk", 1: "Medium Risk", 2: "High Risk"}
@@ -169,8 +169,8 @@ def ml_predict(data: dict) -> dict:
     pred_class = int(_model.predict(X_scaled)[0])
     proba      = _model.predict_proba(X_scaled)[0]
 
-    shap_vals  = _explainer.shap_values(X_scaled)          # (3, 1, 12)
-    sv_for_class = shap_vals[pred_class][0]                 # (12,)
+    shap_vals  = _explainer.shap_values(X_scaled)   # shape: (n_classes, n_samples, n_features)
+    sv_for_class = shap_vals[pred_class][0]          # (12,)
 
     # Build readable explanation
     feat_impact = sorted(
