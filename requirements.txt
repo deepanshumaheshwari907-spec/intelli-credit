@@ -5,6 +5,6 @@ PyPDF2
 vaderSentiment
 requests
 scikit-learn
+shap
 pandas
 numpy
-shap

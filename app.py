@@ -13,6 +13,8 @@ from risk_engine import (
     get_ews_signals, recommend_loan, INDUSTRY_RISK_MAP
 )
 from cam_generator import generate_cam
+from database import save_application, get_all_applications, get_portfolio_stats, delete_application
+from ml_engine import ml_predict, get_feature_importance, FEATURE_LABELS
 
 # ── PAGE CONFIG ────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -436,6 +438,19 @@ if analyze_btn:
 
         ews_signals = get_ews_signals(dscr, revenue_growth, debt_equity, icr, current_ratio, negative_news)
 
+        # ── ML Prediction + SHAP ──────────────────────────────────────
+        try:
+            ml_result = ml_predict({
+                "dscr": dscr, "debt_equity": debt_equity,
+                "revenue_growth": revenue_growth, "icr": icr,
+                "ebitda_margin": ebitda_margin, "current_ratio": current_ratio,
+                "litigation_level": litigation_level, "negative_news": negative_news,
+                "promoter_stake": promoter_stake, "industry": industry,
+                "gst_compliance": gst_compliance, "cibil_score": cibil_score,
+            })
+        except Exception:
+            ml_result = None
+
         st.session_state.analysis_done = True
         st.session_state.data = {
             "company_name": company_name, "industry": industry,
@@ -446,7 +461,7 @@ if analyze_btn:
             "reasons": reasons, "positives": positives,
             "capacity_risk": capacity_risk, "capital_risk": capital_risk,
             "character_risk": character_risk, "conditions_risk": conditions_risk,
-            "ews_signals": ews_signals, "loan_rec": loan_rec,
+            "ews_signals": ews_signals, "loan_rec": loan_rec, "ml_result": ml_result,
             "gst_compliance": gst_compliance, "cibil_score": cibil_score, "mca_status": mca_status,
             # for simulation
             "current_revenue": current_revenue, "previous_revenue": previous_revenue,
@@ -457,6 +472,13 @@ if analyze_btn:
             "litigation_level": litigation_level, "negative_news": negative_news,
             "promoter_stake": promoter_stake,
         }
+
+        # ── Auto-save to database ──────────────────────────────────────
+        try:
+            saved_id = save_application(st.session_state.data)
+            st.session_state.last_saved_id = saved_id
+        except Exception:
+            pass
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RESULTS
@@ -532,12 +554,14 @@ if st.session_state.analysis_done:
         </div>
     </div>
     """, unsafe_allow_html=True)
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊  Financial Ratios",
         "📈  Risk Dashboard",
         "⚠️  Risk Factors",
         "🔬  Stress Test",
-        "📄  CAM Report"
+        "📄  CAM Report",
+        "🗄️  Portfolio History",
+        "🤖  ML Explainability"
     ])
 
     # ════════════════════════════════════════════════════════════════════
@@ -846,6 +870,217 @@ if st.session_state.analysis_done:
                         mime="application/pdf",
                         use_container_width=True
                     )
+
+    # ════════════════════════════════════════════════════════════════════
+    # TAB 6 — PORTFOLIO HISTORY
+    # ════════════════════════════════════════════════════════════════════
+    with tab6:
+        st.markdown('<div class="section-title">📊 Portfolio Overview</div>', unsafe_allow_html=True)
+
+        stats = get_portfolio_stats()
+
+        if stats["total"] == 0:
+            st.markdown('<div style="color:rgba(255,255,255,0.4);text-align:center;padding:30px">No applications saved yet. Run an analysis first!</div>', unsafe_allow_html=True)
+        else:
+            # ── Stats Row ────────────────────────────────────────────
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Total Applications", stats["total"])
+            c2.metric("🟢 Low Risk",    stats["low"])
+            c3.metric("🟡 Medium Risk", stats["medium"])
+            c4.metric("🔴 High Risk",   stats["high"])
+            c5.metric("Avg Risk Score", f"{stats['avg_score']}/100")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            col_pie, col_bar = st.columns(2)
+
+            # ── Pie chart — Risk distribution ─────────────────────
+            with col_pie:
+                st.markdown('<div class="section-title">Risk Distribution</div>', unsafe_allow_html=True)
+                fig_pie = go.Figure(go.Pie(
+                    labels=["Low Risk", "Medium Risk", "High Risk"],
+                    values=[stats["low"], stats["medium"], stats["high"]],
+                    marker_colors=["#22c55e", "#f59e0b", "#ef4444"],
+                    hole=0.5,
+                    textfont=dict(family="IBM Plex Sans", size=11),
+                ))
+                fig_pie.update_layout(
+                    height=260, margin=dict(t=20, b=10, l=10, r=10),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    legend=dict(font=dict(color="#9ca3af", family="IBM Plex Sans"), bgcolor="rgba(0,0,0,0)"),
+                    font={"family": "IBM Plex Sans"}
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+            # ── Exposure bar ──────────────────────────────────────
+            with col_bar:
+                st.markdown('<div class="section-title">Loan Exposure Summary</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class="metric-card" style="margin-bottom:10px">
+                    <div class="metric-label">Total Loan Requests</div>
+                    <div class="metric-value" style="font-size:1.2rem">₹ {stats['total_exposure']:,.0f}</div>
+                </div>
+                <div class="metric-card" style="margin-bottom:10px">
+                    <div class="metric-label">Total Sanctioned Amount</div>
+                    <div class="metric-value" style="font-size:1.2rem;color:#22c55e">₹ {stats['total_sanctioned']:,.0f}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Portfolio Avg DSCR</div>
+                    <div class="metric-value" style="font-size:1.2rem;color:#c9974a">{stats['avg_dscr']}x</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # ── Application History Table ─────────────────────────
+            st.markdown('<div class="section-title">Application History</div>', unsafe_allow_html=True)
+            apps = get_all_applications()
+
+            for app in apps:
+                cat_color = "#22c55e" if app["risk_category"] == "Low Risk" else ("#f59e0b" if app["risk_category"] == "Medium Risk" else "#ef4444")
+                col_a, col_b = st.columns([5, 1])
+                with col_a:
+                    st.markdown(f"""
+                    <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
+                                border-left:3px solid {cat_color};border-radius:6px;
+                                padding:10px 16px;margin-bottom:6px;">
+                        <span style="color:#ffffff;font-weight:600;font-size:0.9rem">{app['company_name']}</span>
+                        <span style="color:#9ca3af;font-size:0.78rem;margin-left:12px">{app['industry']}</span>
+                        <span style="color:#9ca3af;font-size:0.78rem;margin-left:12px">{app['created_at']}</span>
+                        <br>
+                        <span style="color:{cat_color};font-size:0.82rem;font-weight:600">{app['risk_category']}</span>
+                        <span style="color:#9ca3af;font-size:0.78rem;margin-left:10px">Score: {app['risk_score']}/100</span>
+                        <span style="color:#9ca3af;font-size:0.78rem;margin-left:10px">DSCR: {app['dscr']}x</span>
+                        <span style="color:#9ca3af;font-size:0.78rem;margin-left:10px">D/E: {app['debt_equity']}x</span>
+                        <span style="color:#9ca3af;font-size:0.78rem;margin-left:10px">Rate: {app['interest_rate']}%</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col_b:
+                    if st.button("🗑️", key=f"del_{app['id']}", help="Delete this record"):
+                        delete_application(app["id"])
+                        st.rerun()
+
+    # ════════════════════════════════════════════════════════════════════
+    # TAB 7 — ML EXPLAINABILITY
+    # ════════════════════════════════════════════════════════════════════
+    with tab7:
+        ml = d.get("ml_result")
+
+        if ml is None:
+            st.warning("ML model could not run. Check that scikit-learn and shap are installed.")
+        else:
+            # ── ML vs Rule-Based comparison ───────────────────────────
+            st.markdown('<div class="section-title">🤖 ML Model vs Rule-Based Engine</div>', unsafe_allow_html=True)
+
+            ml_color = "#22c55e" if ml["ml_category"] == "Low Risk" else ("#f59e0b" if ml["ml_category"] == "Medium Risk" else "#ef4444")
+            rb_color = "#22c55e" if d["category"] == "Low Risk" else ("#f59e0b" if d["category"] == "Medium Risk" else "#ef4444")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">Rule-Based Engine</div>
+                    <div class="metric-value" style="color:{rb_color};font-size:1.2rem">{d['category']}</div>
+                    <div class="metric-sub">Score: {d['score']}/100 · Confidence: {d['confidence']}%</div>
+                </div>""", unsafe_allow_html=True)
+            with c2:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">ML Model (Gradient Boosting)</div>
+                    <div class="metric-value" style="color:{ml_color};font-size:1.2rem">{ml['ml_category']}</div>
+                    <div class="metric-sub">Confidence: {ml['ml_confidence']}%</div>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # ── Probability bars ──────────────────────────────────────
+            st.markdown('<div class="section-title">Prediction Probability Distribution</div>', unsafe_allow_html=True)
+            proba = ml["probabilities"]
+            fig_proba = go.Figure()
+            colors_p = {"Low Risk": "#22c55e", "Medium Risk": "#f59e0b", "High Risk": "#ef4444"}
+            for label, pct in proba.items():
+                fig_proba.add_trace(go.Bar(
+                    name=label, x=[pct], y=["Probability"],
+                    orientation="h", marker_color=colors_p[label],
+                    text=f"{pct}%", textposition="inside",
+                    textfont=dict(color="white", size=12, family="IBM Plex Mono")
+                ))
+            fig_proba.update_layout(
+                barmode="stack", height=120,
+                margin=dict(t=10, b=10, l=10, r=10),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                showlegend=True,
+                legend=dict(font=dict(color="#9ca3af"), bgcolor="rgba(0,0,0,0)", orientation="h"),
+                xaxis=dict(range=[0, 100], color="rgba(255,255,255,0.3)",
+                           gridcolor="rgba(255,255,255,0.06)"),
+                yaxis=dict(color="rgba(255,255,255,0.3)", gridcolor="rgba(0,0,0,0)"),
+                font={"family": "IBM Plex Sans"}
+            )
+            st.plotly_chart(fig_proba, use_container_width=True)
+
+            # ── SHAP Waterfall chart ───────────────────────────────────
+            st.markdown('<div class="section-title">🔍 SHAP — Why Did the Model Decide This?</div>', unsafe_allow_html=True)
+            st.markdown('<div style="color:rgba(255,255,255,0.4);font-size:0.78rem;margin-bottom:12px">Each bar shows how much a feature PUSHED the risk score up (red) or down (green)</div>', unsafe_allow_html=True)
+
+            shap_feats = [ml["shap_features"][i] for i in range(min(10, len(ml["shap_features"])))]
+            shap_vals  = [ml["shap_values"][i]   for i in range(min(10, len(ml["shap_values"])))]
+            raw_vals   = [ml["raw_values"][i]    for i in range(min(10, len(ml["raw_values"])))]
+
+            feat_labels = [f'{FEATURE_LABELS.get(shap_feats[i], shap_feats[i])} = {raw_vals[i]}' for i in range(len(shap_feats))]
+            bar_colors_s = ["#ef4444" if v > 0 else "#22c55e" for v in shap_vals]
+
+            fig_shap = go.Figure(go.Bar(
+                x=shap_vals, y=feat_labels,
+                orientation="h",
+                marker_color=bar_colors_s,
+                marker_line_width=0,
+                text=[f"+{v:.3f}" if v > 0 else f"{v:.3f}" for v in shap_vals],
+                textposition="outside",
+                textfont=dict(color="white", size=10, family="IBM Plex Mono")
+            ))
+            fig_shap.add_vline(x=0, line_color="rgba(255,255,255,0.3)", line_width=1)
+            fig_shap.update_layout(
+                height=380, margin=dict(t=20, b=20, l=20, r=60),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(color="rgba(255,255,255,0.4)", gridcolor="rgba(255,255,255,0.06)",
+                           title="SHAP Value (Impact on Risk Score)"),
+                yaxis=dict(color="rgba(255,255,255,0.7)", gridcolor="rgba(0,0,0,0)",
+                           tickfont=dict(size=9)),
+                font={"family": "IBM Plex Sans"}
+            )
+            st.plotly_chart(fig_shap, use_container_width=True)
+
+            # ── Feature Importance ────────────────────────────────────
+            st.markdown('<div class="section-title">📊 Global Feature Importance (Trained Model)</div>', unsafe_allow_html=True)
+            fi = get_feature_importance()
+            fi_labels = list(fi.keys())[:8]
+            fi_vals   = [round(v * 100, 1) for v in list(fi.values())[:8]]
+
+            fig_fi = go.Figure(go.Bar(
+                x=fi_vals, y=fi_labels, orientation="h",
+                marker_color="#c9974a", marker_line_width=0,
+                text=[f"{v}%" for v in fi_vals], textposition="outside",
+                textfont=dict(color="white", size=10, family="IBM Plex Mono")
+            ))
+            fig_fi.update_layout(
+                height=320, margin=dict(t=10, b=10, l=20, r=60),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(color="rgba(255,255,255,0.4)", gridcolor="rgba(255,255,255,0.06)"),
+                yaxis=dict(color="rgba(255,255,255,0.7)", gridcolor="rgba(0,0,0,0)",
+                           tickfont=dict(size=9), autorange="reversed"),
+                font={"family": "IBM Plex Sans"}
+            )
+            st.plotly_chart(fig_fi, use_container_width=True)
+
+            # ── Top Risk Drivers ──────────────────────────────────────
+            if ml["top_risk"] or ml["top_positive"]:
+                c_risk, c_pos = st.columns(2)
+                with c_risk:
+                    st.markdown('<div class="section-title">⚠️ Top Risk Drivers (SHAP)</div>', unsafe_allow_html=True)
+                    for feat, impact, val in ml["top_risk"]:
+                        st.markdown(f'<div class="risk-pill-red">📌 {feat} = {val}  (+{impact} risk)</div>', unsafe_allow_html=True)
+                with c_pos:
+                    st.markdown('<div class="section-title">✅ Risk Reducers (SHAP)</div>', unsafe_allow_html=True)
+                    for feat, impact, val in ml["top_positive"]:
+                        st.markdown(f'<div class="risk-pill-green">✅ {feat} = {val}  (-{impact} risk)</div>', unsafe_allow_html=True)
 
 else:
     # ── EMPTY STATE ───────────────────────────────────────────────────────
