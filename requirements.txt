@@ -1,0 +1,10 @@
+streamlit
+plotly
+reportlab
+PyPDF2
+vaderSentiment
+requests
+scikit-learn
+pandas
+numpy
+shap
