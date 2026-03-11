@@ -1,6 +1,6 @@
 """
 Intelli-Credit: AI-Powered Corporate Credit Decision Engine
-v3.0 — Research Agent + Full UI
+v3.2 — Demo Button + PDF Auto-Fill
 """
 
 import streamlit as st
@@ -59,66 +59,309 @@ input, textarea, select { background: rgba(255,255,255,0.05) !important; color: 
 </style>
 """, unsafe_allow_html=True)
 
-if "analysis_done" not in st.session_state:
-    st.session_state.analysis_done = False
-    
+# ══════════════════════════════════════════════════════════════════════════════
+# DEMO DATA — Apex Textiles Ltd
+# ══════════════════════════════════════════════════════════════════════════════
+DEMO = {
+    "company_name":     "Apex Textiles Ltd",
+    "industry":         "Textiles",
+    "loan_amount":      5000000.0,
+    "risk_mode":        "Balanced",
+    "current_revenue":  50000000.0,
+    "previous_revenue": 42000000.0,
+    "ebitda":           8000000.0,
+    "operating_income": 6500000.0,
+    "interest_expense": 2000000.0,
+    "total_debt":       25000000.0,
+    "equity":           12000000.0,
+    "current_assets":   18000000.0,
+    "current_liabs":    14000000.0,
+    "loan_obligation":  4000000.0,
+    "promoter_stake":   45,
+    "litigation_level": "Medium",
+    "negative_news":    3,
+    "gst_compliance":   "Regular & Compliant",
+    "cibil_score":      6.5,
+    "mca_status":       "Up to Date",
+}
+
+# ── Session state init ────────────────────────────────────────────────────────
+if "analysis_done"  not in st.session_state: st.session_state.analysis_done  = False
+if "demo_loaded"    not in st.session_state: st.session_state.demo_loaded    = False
+if "pdf_extracted"  not in st.session_state: st.session_state.pdf_extracted  = {}
+if "pdf_notes"      not in st.session_state: st.session_state.pdf_notes      = ""
+if "last_pdf_name"  not in st.session_state: st.session_state.last_pdf_name  = ""
+
+# ── Helper: number from Indian format string ──────────────────────────────────
+def parse_indian_number(s):
+    """Convert '8,20,00,000' or '1,20,00,000' to float"""
+    try:
+        return float(s.replace(",", ""))
+    except:
+        return None
+
+# ── PDF Parser — extracts & auto-fills key fields ────────────────────────────
+def parse_annual_report(pdf_bytes):
+    """Parse PDF and return dict of extracted fields"""
+    try:
+        import PyPDF2
+        reader  = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
+        pages   = min(len(reader.pages), 20)
+        raw     = " ".join(page.extract_text() or "" for page in reader.pages[:pages])
+        raw_low = raw.lower()
+        result  = {}
+
+        # ── Revenue / Turnover ──────────────────────────────────────────────
+        rev_patterns = [
+            r'(?:total revenue|net revenue|turnover|total turnover|revenue from operations)[^\d]{0,30}([\d,]+(?:\.\d+)?)',
+            r'(?:revenue)[^\d]{0,15}([\d,]{6,})',
+        ]
+        for pat in rev_patterns:
+            m = re.findall(pat, raw, re.IGNORECASE)
+            if m:
+                vals = [parse_indian_number(x) for x in m[:3] if parse_indian_number(x) and parse_indian_number(x) > 100000]
+                if vals:
+                    result["current_revenue"]  = vals[0]
+                    result["previous_revenue"] = vals[1] if len(vals) > 1 else vals[0] * 0.85
+                    break
+
+        # ── EBITDA ──────────────────────────────────────────────────────────
+        ebitda_patterns = [
+            r'(?:ebitda)[^\d]{0,20}([\d,]+(?:\.\d+)?)',
+            r'(?:earnings before interest)[^\d]{0,40}([\d,]+(?:\.\d+)?)',
+        ]
+        for pat in ebitda_patterns:
+            m = re.findall(pat, raw, re.IGNORECASE)
+            if m:
+                vals = [parse_indian_number(x) for x in m[:2] if parse_indian_number(x) and parse_indian_number(x) > 10000]
+                if vals:
+                    result["ebitda"] = vals[0]
+                    break
+
+        # ── Operating Income / PAT ──────────────────────────────────────────
+        op_patterns = [
+            r'(?:operating income|ebit|profit after tax|pat)[^\d]{0,20}([\d,]+(?:\.\d+)?)',
+            r'(?:net profit|profit for the year)[^\d]{0,20}([\d,]+(?:\.\d+)?)',
+        ]
+        for pat in op_patterns:
+            m = re.findall(pat, raw, re.IGNORECASE)
+            if m:
+                vals = [parse_indian_number(x) for x in m[:2] if parse_indian_number(x) and parse_indian_number(x) > 5000]
+                if vals:
+                    result["operating_income"] = vals[0]
+                    break
+
+        # ── Interest Expense ────────────────────────────────────────────────
+        int_patterns = [
+            r'(?:interest expense|interest.*?finance|finance charges)[^\d]{0,20}([\d,]+(?:\.\d+)?)',
+            r'(?:interest)[^\d]{0,10}([\d,]{4,})',
+        ]
+        for pat in int_patterns:
+            m = re.findall(pat, raw, re.IGNORECASE)
+            if m:
+                vals = [parse_indian_number(x) for x in m[:2] if parse_indian_number(x) and 1000 < parse_indian_number(x) < 10000000]
+                if vals:
+                    result["interest_expense"] = vals[0]
+                    break
+
+        # ── Total Debt ──────────────────────────────────────────────────────
+        debt_patterns = [
+            r'(?:total debt|total borrowings|borrowings)[^\d]{0,20}([\d,]+(?:\.\d+)?)',
+            r'(?:long.?term borrowing)[^\d]{0,20}([\d,]+(?:\.\d+)?)',
+        ]
+        for pat in debt_patterns:
+            m = re.findall(pat, raw, re.IGNORECASE)
+            if m:
+                vals = [parse_indian_number(x) for x in m[:2] if parse_indian_number(x) and parse_indian_number(x) > 100000]
+                if vals:
+                    result["total_debt"] = vals[0]
+                    break
+
+        # ── Equity ──────────────────────────────────────────────────────────
+        eq_patterns = [
+            r'(?:total equity|shareholders.{0,10}equity|net worth)[^\d]{0,20}([\d,]+(?:\.\d+)?)',
+            r'(?:equity)[^\d]{0,10}([\d,]{5,})',
+        ]
+        for pat in eq_patterns:
+            m = re.findall(pat, raw, re.IGNORECASE)
+            if m:
+                vals = [parse_indian_number(x) for x in m[:2] if parse_indian_number(x) and parse_indian_number(x) > 50000]
+                if vals:
+                    result["equity"] = vals[0]
+                    break
+
+        # ── Current Assets ──────────────────────────────────────────────────
+        m = re.findall(r'(?:current assets)[^\d]{0,20}([\d,]+(?:\.\d+)?)', raw, re.IGNORECASE)
+        if m:
+            vals = [parse_indian_number(x) for x in m[:2] if parse_indian_number(x) and parse_indian_number(x) > 50000]
+            if vals: result["current_assets"] = vals[0]
+
+        # ── Current Liabilities ─────────────────────────────────────────────
+        m = re.findall(r'(?:current liabilities)[^\d]{0,20}([\d,]+(?:\.\d+)?)', raw, re.IGNORECASE)
+        if m:
+            vals = [parse_indian_number(x) for x in m[:2] if parse_indian_number(x) and parse_indian_number(x) > 50000]
+            if vals: result["current_liabs"] = vals[0]
+
+        # ── Annual Debt Repayment ───────────────────────────────────────────
+        m = re.findall(r'(?:annual.*?repayment|debt repayment|loan repayment)[^\d]{0,20}([\d,]+(?:\.\d+)?)', raw, re.IGNORECASE)
+        if m:
+            vals = [parse_indian_number(x) for x in m[:2] if parse_indian_number(x) and parse_indian_number(x) > 10000]
+            if vals: result["loan_obligation"] = vals[0]
+
+        # ── Company Name ────────────────────────────────────────────────────
+        name_m = re.search(r'([A-Z][A-Z\s&\.]{5,50}(?:LTD|PVT\.?\s*LTD|LIMITED|PRIVATE LIMITED))', raw)
+        if name_m:
+            result["company_name"] = name_m.group(1).strip().title()
+
+        # ── CIBIL Score ─────────────────────────────────────────────────────
+        cibil_m = re.search(r'cibil.*?([\d\.]+)\s*/\s*10', raw, re.IGNORECASE)
+        if cibil_m:
+            v = float(cibil_m.group(1))
+            if 1 <= v <= 10: result["cibil_score"] = v
+
+        # ── GST Compliance ──────────────────────────────────────────────────
+        if "regular & compliant" in raw_low or "filed on time" in raw_low or "no pending dues" in raw_low:
+            result["gst_compliance"] = "Regular & Compliant"
+        elif "minor delay" in raw_low or "gst delay" in raw_low:
+            result["gst_compliance"] = "Minor Delays"
+
+        # ── MCA / ROC ───────────────────────────────────────────────────────
+        if "up to date" in raw_low or "annual return" in raw_low and "filed" in raw_low:
+            result["mca_status"] = "Up to Date"
+
+        result["_raw_text"] = raw[:3000]
+        result["_pages"]    = pages
+        return result
+
+    except Exception as e:
+        return {"_error": str(e)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
+
+    # ── GOLD DEMO BUTTON ─────────────────────────────────────────────────────
+    if st.button("⚡  Load Demo Data — Apex Textiles Ltd", use_container_width=True):
+        st.session_state.demo_loaded   = True
+        st.session_state.pdf_extracted = {}   # clear any PDF data
+        st.rerun()
+
+    st.markdown("---")
+
+    # ── Value resolver: PDF → Demo → Default ─────────────────────────────────
+    def val(key, default):
+        if key in st.session_state.pdf_extracted:
+            return st.session_state.pdf_extracted[key]
+        if st.session_state.demo_loaded:
+            return DEMO.get(key, default)
+        return default
+
     st.markdown("### 🏢 Company Profile")
-    company_name     = st.text_input("Company Name", placeholder="e.g. Acme Industries Ltd.")
-    industry         = st.selectbox("Industry Sector", list(INDUSTRY_RISK_MAP.keys()))
-    loan_amount      = st.number_input("Loan Amount Requested (₹)", min_value=0.0, step=100000.0, format="%.0f")
-    risk_mode        = st.selectbox("Assessment Mode", ["Balanced", "Conservative", "Aggressive"])
+    company_name = st.text_input("Company Name",
+        value=val("company_name", ""), placeholder="e.g. Acme Industries Ltd.")
+
+    industry_list = list(INDUSTRY_RISK_MAP.keys())
+    demo_idx      = industry_list.index(DEMO["industry"]) if DEMO["industry"] in industry_list else 0
+    industry      = st.selectbox("Industry Sector", industry_list,
+        index=demo_idx if st.session_state.demo_loaded else 0)
+
+    loan_amount   = st.number_input("Loan Amount Requested (₹)",
+        min_value=0.0, step=100000.0, format="%.0f",
+        value=val("loan_amount", 0.0))
+
+    risk_mode     = st.selectbox("Assessment Mode", ["Balanced","Conservative","Aggressive"],
+        index=["Balanced","Conservative","Aggressive"].index(
+            val("risk_mode","Balanced")) if val("risk_mode","Balanced") in ["Balanced","Conservative","Aggressive"] else 0)
 
     st.markdown("---")
     st.markdown("### 📊 Financials — P&L")
-    current_revenue  = st.number_input("Current Year Revenue (₹)",   min_value=0.0, step=100000.0, format="%.0f")
-    previous_revenue = st.number_input("Previous Year Revenue (₹)",  min_value=0.0, step=100000.0, format="%.0f")
-    ebitda           = st.number_input("EBITDA (₹)",                  min_value=0.0, step=100000.0, format="%.0f")
-    operating_income = st.number_input("Operating Income / PAT (₹)", min_value=0.0, step=100000.0, format="%.0f")
-    interest_expense = st.number_input("Interest Expense (₹)",       min_value=0.0, step=10000.0,  format="%.0f")
+    current_revenue  = st.number_input("Current Year Revenue (₹)",   min_value=0.0, step=100000.0, format="%.0f", value=val("current_revenue",  0.0))
+    previous_revenue = st.number_input("Previous Year Revenue (₹)",  min_value=0.0, step=100000.0, format="%.0f", value=val("previous_revenue", 0.0))
+    ebitda           = st.number_input("EBITDA (₹)",                  min_value=0.0, step=100000.0, format="%.0f", value=val("ebitda",           0.0))
+    operating_income = st.number_input("Operating Income / PAT (₹)", min_value=0.0, step=100000.0, format="%.0f", value=val("operating_income",  0.0))
+    interest_expense = st.number_input("Interest Expense (₹)",       min_value=0.0, step=10000.0,  format="%.0f", value=val("interest_expense",  0.0))
 
     st.markdown("### 🏦 Financials — Balance Sheet")
-    total_debt       = st.number_input("Total Debt (₹)",            min_value=0.0, step=100000.0, format="%.0f")
-    equity           = st.number_input("Total Equity (₹)",          min_value=0.0, step=100000.0, format="%.0f")
-    current_assets   = st.number_input("Current Assets (₹)",        min_value=0.0, step=100000.0, format="%.0f")
-    current_liabs    = st.number_input("Current Liabilities (₹)",   min_value=0.0, step=100000.0, format="%.0f")
-    loan_obligation  = st.number_input("Annual Debt Repayment (₹)", min_value=0.0, step=10000.0,  format="%.0f")
+    total_debt      = st.number_input("Total Debt (₹)",            min_value=0.0, step=100000.0, format="%.0f", value=val("total_debt",      0.0))
+    equity          = st.number_input("Total Equity (₹)",          min_value=0.0, step=100000.0, format="%.0f", value=val("equity",          0.0))
+    current_assets  = st.number_input("Current Assets (₹)",        min_value=0.0, step=100000.0, format="%.0f", value=val("current_assets",  0.0))
+    current_liabs   = st.number_input("Current Liabilities (₹)",   min_value=0.0, step=100000.0, format="%.0f", value=val("current_liabs",   0.0))
+    loan_obligation = st.number_input("Annual Debt Repayment (₹)", min_value=0.0, step=10000.0,  format="%.0f", value=val("loan_obligation", 0.0))
 
     st.markdown("### ⚖️ Qualitative Factors")
-    promoter_stake   = st.slider("Promoter Equity Stake (%)", 0, 100, 51)
-    litigation_level = st.selectbox("Litigation Exposure", ["Low", "Medium", "High"])
-    negative_news    = st.number_input("Negative News Count", min_value=0, step=1)
-    primary_notes    = st.text_area("Credit Officer Notes", placeholder="Enter due-diligence observations...", height=110)
+    promoter_stake   = st.slider("Promoter Equity Stake (%)", 0, 100, int(val("promoter_stake", 51)))
+
+    lit_options      = ["Low","Medium","High"]
+    litigation_level = st.selectbox("Litigation Exposure", lit_options,
+        index=lit_options.index(val("litigation_level","Low")))
+
+    negative_news    = st.number_input("Negative News Count", min_value=0, step=1,
+        value=int(val("negative_news", 0)))
+    primary_notes    = st.text_area("Credit Officer Notes",
+        placeholder="Enter due-diligence observations...", height=110)
 
     st.markdown("### 🇮🇳 Indian Context")
-    gst_compliance   = st.selectbox("GST Filing Compliance", ["Regular & Compliant", "Minor Delays", "Frequent Defaults", "Not Registered"])
-    cibil_score      = st.number_input("CIBIL Commercial Score (1–10)", min_value=0.0, max_value=10.0, step=0.1, value=7.0)
-    mca_status       = st.selectbox("MCA21 / ROC Filing Status", ["Up to Date", "Minor Delays", "Significant Gaps", "Not Filed"])
+    gst_options    = ["Regular & Compliant","Minor Delays","Frequent Defaults","Not Registered"]
+    gst_compliance = st.selectbox("GST Filing Compliance", gst_options,
+        index=gst_options.index(val("gst_compliance","Regular & Compliant")))
 
+    cibil_score    = st.number_input("CIBIL Commercial Score (1–10)",
+        min_value=0.0, max_value=10.0, step=0.1,
+        value=float(val("cibil_score", 7.0)))
+
+    mca_options  = ["Up to Date","Minor Delays","Significant Gaps","Not Filed"]
+    mca_status   = st.selectbox("MCA21 / ROC Filing Status", mca_options,
+        index=mca_options.index(val("mca_status","Up to Date")))
+
+    # ── PDF UPLOAD — AUTO FILL ────────────────────────────────────────────────
     st.markdown("### 📁 Upload Annual Report PDF")
+    st.caption("PDF upload karega toh relevant fields automatically fill ho jayenge!")
     uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"])
-    pdf_extracted_notes = ""
+
     if uploaded_pdf is not None:
-        try:
-            import PyPDF2
-            reader = PyPDF2.PdfReader(io.BytesIO(uploaded_pdf.read()))
-            raw_text     = " ".join(page.extract_text() or "" for page in reader.pages[:15])
-            rev_match    = re.findall(r'(?:revenue|turnover)[^\d]{0,20}([\d,]+(?:\.\d+)?)', raw_text, re.IGNORECASE)
-            profit_match = re.findall(r'(?:ebitda|operating profit)[^\d]{0,20}([\d,]+(?:\.\d+)?)', raw_text, re.IGNORECASE)
-            pdf_extracted_notes = raw_text[:2000]
-            st.success(f"✅ PDF parsed — {len(reader.pages)} pages")
-            if rev_match:    st.info(f"Revenue figures: {', '.join(rev_match[:3])}")
-            if profit_match: st.info(f"EBITDA figures: {', '.join(profit_match[:3])}")
-            with st.expander("View Extracted Text"):
-                st.text(raw_text[:600])
-        except Exception as e:
-            st.warning(f"PDF note: {str(e)[:80]}")
+        if uploaded_pdf.name != st.session_state.last_pdf_name:
+            # New PDF uploaded — parse it
+            with st.spinner("📄 Parsing PDF... extracting financial data..."):
+                pdf_bytes = uploaded_pdf.read()
+                extracted = parse_annual_report(pdf_bytes)
+
+            if "_error" in extracted:
+                st.error(f"PDF parse error: {extracted['_error']}")
+            else:
+                # Save to session state — this triggers auto-fill above
+                clean = {k: v for k, v in extracted.items() if not k.startswith("_")}
+                st.session_state.pdf_extracted  = clean
+                st.session_state.demo_loaded    = False   # PDF overrides demo
+                st.session_state.last_pdf_name  = uploaded_pdf.name
+                st.session_state.pdf_notes      = extracted.get("_raw_text","")
+
+                # Show what was extracted
+                filled = [k for k in clean if k != "cibil_score"]
+                st.success(f"✅ PDF parsed ({extracted.get('_pages',0)} pages) — {len(filled)} fields extracted!")
+
+                if "current_revenue" in clean:
+                    st.info(f"📊 Revenue: ₹{clean['current_revenue']:,.0f}")
+                if "ebitda" in clean:
+                    st.info(f"📊 EBITDA: ₹{clean['ebitda']:,.0f}")
+                if "total_debt" in clean:
+                    st.info(f"📊 Total Debt: ₹{clean['total_debt']:,.0f}")
+                if "equity" in clean:
+                    st.info(f"📊 Equity: ₹{clean['equity']:,.0f}")
+                if "gst_compliance" in clean:
+                    st.info(f"🇮🇳 GST: {clean['gst_compliance']}")
+                if "cibil_score" in clean:
+                    st.info(f"🇮🇳 CIBIL: {clean['cibil_score']}")
+
+                with st.expander("📝 View Extracted Text (first 500 chars)"):
+                    st.text(extracted.get("_raw_text","")[:500])
+
+                st.rerun()  # re-render sidebar with filled values
 
     st.markdown("---")
     analyze_btn = st.button("🚀  Run Credit Analysis", use_container_width=True)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADER
@@ -131,11 +374,45 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ── Status banner ─────────────────────────────────────────────────────────────
+if st.session_state.pdf_extracted and not st.session_state.analysis_done:
+    filled_count = len([k for k in st.session_state.pdf_extracted if not k.startswith("_")])
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,rgba(34,197,94,0.1),rgba(5,46,22,0.2));
+                border:1px solid rgba(34,197,94,0.4);border-radius:10px;
+                padding:14px 20px;margin-bottom:18px;">
+        <span style="color:#22c55e;font-weight:700;">
+            📄 PDF Loaded — {filled_count} fields auto-filled from Annual Report
+        </span>
+        <span style="color:rgba(255,255,255,0.5);font-size:0.85rem;margin-left:12px;">
+            Review sidebar fields, then click Run Credit Analysis
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+elif st.session_state.demo_loaded and not st.session_state.analysis_done:
+    st.markdown("""
+    <div style="background:linear-gradient(135deg,rgba(201,151,74,0.12),rgba(201,151,74,0.04));
+                border:1px solid rgba(201,151,74,0.4);border-radius:10px;
+                padding:14px 20px;margin-bottom:18px;">
+        <span style="color:#c9974a;font-weight:700;">
+            🎯 Demo: Apex Textiles Ltd loaded
+        </span>
+        <span style="color:rgba(255,255,255,0.5);font-size:0.85rem;margin-left:12px;">
+            Click <b style="color:#c9974a">Run Credit Analysis</b> to see AI decision!
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ANALYSIS
 # ══════════════════════════════════════════════════════════════════════════════
 if analyze_btn:
     with st.spinner("Running credit analysis..."):
+        # Use pdf_notes if available
+        extra_notes = st.session_state.pdf_notes + " " + primary_notes
+
         dscr, debt_equity, revenue_growth, icr, ebitda_margin, current_ratio = calculate_ratios(
             current_revenue, previous_revenue, operating_income,
             loan_obligation, total_debt, equity,
@@ -147,7 +424,7 @@ if analyze_btn:
             litigation_level, negative_news, promoter_stake, industry, risk_mode
         )
 
-        note_adj, note_insights = analyze_primary_notes(primary_notes + " " + pdf_extracted_notes)
+        note_adj, note_insights = analyze_primary_notes(extra_notes)
         score = max(0, min(100, score + note_adj))
 
         indian_flags = []
@@ -270,19 +547,12 @@ if st.session_state.analysis_done:
         </div>
     </div>""", unsafe_allow_html=True)
 
-    # ── 8 TABS — with proper commas ✅ ────────────────────────────────
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "📊  Financial Ratios",
-        "📈  Risk Dashboard",
-        "⚠️  Risk Factors",
-        "🔬  Stress Test",
-        "📄  CAM Report",
-        "🗄️  Portfolio History",
-        "🤖  ML Explainability",
-        "🔍  Research Agent",
+        "📊  Financial Ratios", "📈  Risk Dashboard", "⚠️  Risk Factors",
+        "🔬  Stress Test", "📄  CAM Report", "🗄️  Portfolio History",
+        "🤖  ML Explainability", "🔍  Research Agent",
     ])
 
-    # ── TAB 1: Financial Ratios ───────────────────────────────────────
     with tab1:
         st.markdown('<div class="section-title">Calculated Financial Ratios</div>', unsafe_allow_html=True)
         def ratio_card(label, value, benchmark, good, warn, unit="x"):
@@ -291,58 +561,51 @@ if st.session_state.analysis_done:
             elif value >= warn: status, color = "🟡 Acceptable", "#f59e0b"
             else: status, color = "🔴 Weak", "#ef4444"
             return f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value" style="color:{color};font-size:1.4rem">{value:.2f}{unit}</div><div class="metric-sub">Benchmark: {benchmark} • {status}</div></div>'
-
-        c1, c2, c3 = st.columns(3)
+        c1,c2,c3 = st.columns(3)
         with c1: st.markdown(ratio_card("DSCR", d["dscr"], "≥ 1.50x", 1.5, 1.2), unsafe_allow_html=True)
-        with c2: st.markdown(ratio_card("Interest Coverage (ICR)", d["icr"], "≥ 2.50x", 2.5, 1.5) if d["icr"] > 0 else '<div class="metric-card"><div class="metric-label">ICR</div><div class="metric-value" style="color:#9ca3af">N/A</div></div>', unsafe_allow_html=True)
+        with c2: st.markdown(ratio_card("Interest Coverage (ICR)", d["icr"], "≥ 2.50x", 2.5, 1.5) if d["icr"]>0 else '<div class="metric-card"><div class="metric-label">ICR</div><div class="metric-value" style="color:#9ca3af">N/A</div></div>', unsafe_allow_html=True)
         with c3: st.markdown(ratio_card("Debt-to-Equity", d["debt_equity"], "≤ 2.00x", 0, 2.0), unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-        c4, c5, c6 = st.columns(3)
-        with c4: st.markdown(ratio_card("EBITDA Margin", d["ebitda_margin"], "≥ 15%", 15, 8, "%") if d["ebitda_margin"] > 0 else '<div class="metric-card"><div class="metric-label">EBITDA Margin</div><div class="metric-value" style="color:#9ca3af">N/A</div></div>', unsafe_allow_html=True)
-        with c5: st.markdown(ratio_card("Current Ratio", d["current_ratio"], "≥ 1.33x", 1.33, 1.0) if d["current_ratio"] > 0 else '<div class="metric-card"><div class="metric-label">Current Ratio</div><div class="metric-value" style="color:#9ca3af">N/A</div></div>', unsafe_allow_html=True)
+        c4,c5,c6 = st.columns(3)
+        with c4: st.markdown(ratio_card("EBITDA Margin", d["ebitda_margin"], "≥ 15%", 15, 8, "%") if d["ebitda_margin"]>0 else '<div class="metric-card"><div class="metric-label">EBITDA Margin</div><div class="metric-value" style="color:#9ca3af">N/A</div></div>', unsafe_allow_html=True)
+        with c5: st.markdown(ratio_card("Current Ratio", d["current_ratio"], "≥ 1.33x", 1.33, 1.0) if d["current_ratio"]>0 else '<div class="metric-card"><div class="metric-label">Current Ratio</div><div class="metric-value" style="color:#9ca3af">N/A</div></div>', unsafe_allow_html=True)
         with c6:
             rg = d["revenue_growth"]
-            rg_color = "#22c55e" if rg >= 10 else ("#f59e0b" if rg >= 0 else "#ef4444")
-            rg_status = "✅ Strong" if rg >= 10 else ("🟡 Moderate" if rg >= 0 else "🔴 Declining")
+            rg_color = "#22c55e" if rg>=10 else ("#f59e0b" if rg>=0 else "#ef4444")
+            rg_status = "✅ Strong" if rg>=10 else ("🟡 Moderate" if rg>=0 else "🔴 Declining")
             st.markdown(f'<div class="metric-card"><div class="metric-label">Revenue Growth</div><div class="metric-value" style="color:{rg_color};font-size:1.4rem">{rg:.1f}%</div><div class="metric-sub">Benchmark: ≥ 10% • {rg_status}</div></div>', unsafe_allow_html=True)
 
-    # ── TAB 2: Risk Dashboard ─────────────────────────────────────────
     with tab2:
         col_g, col_r = st.columns(2)
         with col_g:
             st.markdown('<div class="section-title">Overall Risk Score</div>', unsafe_allow_html=True)
-            gc = "#ef4444" if d["score"] > 55 else ("#f59e0b" if d["score"] > 28 else "#22c55e")
-            fig_g = go.Figure(go.Indicator(
-                mode="gauge+number", value=d["score"],
-                number={"font": {"size": 42, "color": gc, "family": "IBM Plex Mono"}},
-                title={"text": f"<b>{d['category']}</b>", "font": {"size": 14, "color": "#c9974a"}},
-                gauge={"axis": {"range": [0, 100]}, "bar": {"color": gc, "thickness": 0.28},
-                       "bgcolor": "rgba(0,0,0,0)", "borderwidth": 0,
-                       "steps": [{"range": [0,28], "color": "rgba(34,197,94,0.15)"}, {"range": [28,55], "color": "rgba(245,158,11,0.15)"}, {"range": [55,100], "color": "rgba(239,68,68,0.15)"}]}
-            ))
-            fig_g.update_layout(height=280, margin=dict(t=30,b=10,l=20,r=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            gc = "#ef4444" if d["score"]>55 else ("#f59e0b" if d["score"]>28 else "#22c55e")
+            fig_g = go.Figure(go.Indicator(mode="gauge+number", value=d["score"],
+                number={"font":{"size":42,"color":gc,"family":"IBM Plex Mono"}},
+                title={"text":f"<b>{d['category']}</b>","font":{"size":14,"color":"#c9974a"}},
+                gauge={"axis":{"range":[0,100]},"bar":{"color":gc,"thickness":0.28},
+                       "bgcolor":"rgba(0,0,0,0)","borderwidth":0,
+                       "steps":[{"range":[0,28],"color":"rgba(34,197,94,0.15)"},{"range":[28,55],"color":"rgba(245,158,11,0.15)"},{"range":[55,100],"color":"rgba(239,68,68,0.15)"}]}))
+            fig_g.update_layout(height=280,margin=dict(t=30,b=10,l=20,r=20),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig_g, use_container_width=True)
         with col_r:
             st.markdown('<div class="section-title">Risk Component Breakdown</div>', unsafe_allow_html=True)
             cats = ["Capacity","Capital","Character","Conditions"]
             vals = [d["capacity_risk"],d["capital_risk"],d["character_risk"],d["conditions_risk"]]
-            fig_r = go.Figure(go.Scatterpolar(r=vals+[vals[0]], theta=cats+[cats[0]], fill="toself", fillcolor="rgba(201,151,74,0.18)", line=dict(color="#c9974a",width=2)))
-            fig_r.update_layout(polar=dict(radialaxis=dict(visible=True,range=[0,100]), bgcolor="rgba(0,0,0,0)"), showlegend=False, height=280, margin=dict(t=20,b=20,l=20,r=20), paper_bgcolor="rgba(0,0,0,0)")
+            fig_r = go.Figure(go.Scatterpolar(r=vals+[vals[0]],theta=cats+[cats[0]],fill="toself",fillcolor="rgba(201,151,74,0.18)",line=dict(color="#c9974a",width=2)))
+            fig_r.update_layout(polar=dict(radialaxis=dict(visible=True,range=[0,100]),bgcolor="rgba(0,0,0,0)"),showlegend=False,height=280,margin=dict(t=20,b=20,l=20,r=20),paper_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig_r, use_container_width=True)
-
         st.markdown('<div class="section-title">Weighted Score Contribution (5 Cs Model)</div>', unsafe_allow_html=True)
-        wts = {"Capacity (35%)": d["capacity_risk"]*0.35, "Capital (25%)": d["capital_risk"]*0.25, "Character (20%)": d["character_risk"]*0.20, "Conditions (20%)": d["conditions_risk"]*0.20}
+        wts = {"Capacity (35%)":d["capacity_risk"]*0.35,"Capital (25%)":d["capital_risk"]*0.25,"Character (20%)":d["character_risk"]*0.20,"Conditions (20%)":d["conditions_risk"]*0.20}
         bc  = ["#ef4444" if v>20 else ("#f59e0b" if v>10 else "#22c55e") for v in wts.values()]
-        fig_b = go.Figure(go.Bar(x=list(wts.keys()), y=list(wts.values()), marker_color=bc, text=[f"{v:.1f}" for v in wts.values()], textposition="outside", textfont=dict(color="white",size=11)))
-        fig_b.update_layout(height=280, margin=dict(t=30,b=10,l=10,r=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(color="rgba(255,255,255,0.5)"), yaxis=dict(color="rgba(255,255,255,0.3)", gridcolor="rgba(255,255,255,0.06)"))
+        fig_b = go.Figure(go.Bar(x=list(wts.keys()),y=list(wts.values()),marker_color=bc,text=[f"{v:.1f}" for v in wts.values()],textposition="outside",textfont=dict(color="white",size=11)))
+        fig_b.update_layout(height=280,margin=dict(t=30,b=10,l=10,r=10),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",xaxis=dict(color="rgba(255,255,255,0.5)"),yaxis=dict(color="rgba(255,255,255,0.3)",gridcolor="rgba(255,255,255,0.06)"))
         st.plotly_chart(fig_b, use_container_width=True)
-
         st.markdown('<div class="section-title">⚡ Early Warning Signals</div>', unsafe_allow_html=True)
         for sev, msg in d["ews_signals"]:
             css = "ews-critical" if "Critical" in sev else ("ews-watch" if "Watch" in sev else "ews-clear")
             st.markdown(f'<div class="{css}"><b>{sev}</b> — {msg}</div>', unsafe_allow_html=True)
 
-    # ── TAB 3: Risk Factors ───────────────────────────────────────────
     with tab3:
         cr, cp = st.columns(2)
         with cr:
@@ -355,182 +618,155 @@ if st.session_state.analysis_done:
             for p in (d["positives"] or ["🟡 No significant positives"]):
                 st.markdown(f'<div class="risk-pill-green">{p}</div>', unsafe_allow_html=True)
 
-    # ── TAB 4: Stress Test ────────────────────────────────────────────
     with tab4:
         st.markdown('<div class="section-title">What-If Scenario Analysis</div>', unsafe_allow_html=True)
         s1, s2 = st.columns(2)
         with s1: rc = st.slider("Revenue Change (%)", -50, 50, 0, key="sim_rev")
         with s2: dc = st.slider("Debt Change (%)",    -50, 50, 0, key="sim_dbt")
         if st.button("⚡ Run Stress Scenarios", use_container_width=True):
-            scenarios = {"Base Case":(0,0), "Stress -20%":(-20,20), "Severe -40%":(-40,40), "Recovery +15%":(15,-10), "Custom":(rc,dc)}
+            scenarios = {"Base Case":(0,0),"Stress -20%":(-20,20),"Severe -40%":(-40,40),"Recovery +15%":(15,-10),"Custom":(rc,dc)}
             results = []
-            for name, (rv, dv) in scenarios.items():
-                sr = d["current_revenue"]*(1+rv/100); sd = d["total_debt"]*(1+dv/100)
-                sdscr,sde,sgr,sicr,sem,scr = calculate_ratios(sr,d["previous_revenue"],d["operating_income"],d["loan_obligation"],sd,d["equity"],d["ebitda"],d["interest_expense"],d["current_assets"],d["current_liabs"])
-                ss,scat,_,_,_,_,_,_,_,_ = calculate_risk(sdscr,sde,sgr,sicr,sem,scr,d["litigation_level"],d["negative_news"],d["promoter_stake"],d["industry"],d["risk_mode"])
+            for name,(rv,dv_) in scenarios.items():
+                sr=d["current_revenue"]*(1+rv/100); sd=d["total_debt"]*(1+dv_/100)
+                sdscr,sde,sgr,sicr,sem,scr=calculate_ratios(sr,d["previous_revenue"],d["operating_income"],d["loan_obligation"],sd,d["equity"],d["ebitda"],d["interest_expense"],d["current_assets"],d["current_liabs"])
+                ss,scat,_,_,_,_,_,_,_,_=calculate_risk(sdscr,sde,sgr,sicr,sem,scr,d["litigation_level"],d["negative_news"],d["promoter_stake"],d["industry"],d["risk_mode"])
                 results.append({"Scenario":name,"Score":ss,"Category":scat,"DSCR":round(sdscr,2),"DE":round(sde,2)})
-            s_colors = ["#ef4444" if r["Score"]>55 else ("#f59e0b" if r["Score"]>28 else "#22c55e") for r in results]
-            fig_s = go.Figure(go.Bar(x=[r["Scenario"] for r in results], y=[r["Score"] for r in results], marker_color=s_colors, text=[r["Score"] for r in results], textposition="outside", textfont=dict(color="white",size=12)))
-            fig_s.add_hline(y=28, line_dash="dot", line_color="#22c55e", annotation_text="Low/Medium (28)")
-            fig_s.add_hline(y=55, line_dash="dot", line_color="#f59e0b", annotation_text="Medium/High (55)")
-            fig_s.update_layout(height=320, margin=dict(t=40,b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(range=[0,110],color="rgba(255,255,255,0.3)",gridcolor="rgba(255,255,255,0.06)"), xaxis=dict(color="rgba(255,255,255,0.5)"))
+            s_colors=["#ef4444" if r["Score"]>55 else ("#f59e0b" if r["Score"]>28 else "#22c55e") for r in results]
+            fig_s=go.Figure(go.Bar(x=[r["Scenario"] for r in results],y=[r["Score"] for r in results],marker_color=s_colors,text=[r["Score"] for r in results],textposition="outside",textfont=dict(color="white",size=12)))
+            fig_s.add_hline(y=28,line_dash="dot",line_color="#22c55e",annotation_text="Low/Medium (28)")
+            fig_s.add_hline(y=55,line_dash="dot",line_color="#f59e0b",annotation_text="Medium/High (55)")
+            fig_s.update_layout(height=320,margin=dict(t=40,b=10),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",yaxis=dict(range=[0,110],color="rgba(255,255,255,0.3)",gridcolor="rgba(255,255,255,0.06)"),xaxis=dict(color="rgba(255,255,255,0.5)"))
             st.plotly_chart(fig_s, use_container_width=True)
             for r in results:
-                cc = "#22c55e" if r["Category"]=="Low Risk" else ("#f59e0b" if r["Category"]=="Medium Risk" else "#ef4444")
+                cc="#22c55e" if r["Category"]=="Low Risk" else ("#f59e0b" if r["Category"]=="Medium Risk" else "#ef4444")
                 st.markdown(f'<div style="display:flex;gap:12px;padding:8px 14px;background:rgba(255,255,255,0.04);border-radius:6px;border-left:3px solid {cc};margin-bottom:5px;"><span style="color:#9ca3af;width:120px;font-size:0.82rem">{r["Scenario"]}</span><span style="color:{cc};font-weight:700;width:80px">Score: {r["Score"]}</span><span style="color:{cc};font-size:0.82rem;width:120px">{r["Category"]}</span><span style="color:rgba(255,255,255,0.5);font-size:0.78rem">DSCR: {r["DSCR"]}x | D/E: {r["DE"]}x</span></div>', unsafe_allow_html=True)
 
-    # ── TAB 5: CAM Report ─────────────────────────────────────────────
     with tab5:
         st.markdown('<div class="section-title">Generate Credit Appraisal Memo (CAM)</div>', unsafe_allow_html=True)
-        st.markdown('<div style="background:rgba(201,151,74,0.1);border:1px solid rgba(201,151,74,0.3);border-radius:8px;padding:14px 18px;margin-bottom:16px;"><span style="color:#c9974a;font-weight:600;">📄 Bank-Grade PDF Report</span><br><span style="color:rgba(255,255,255,0.5);font-size:0.78rem;">Professional CAM with executive summary, ratio analysis, 5Cs scorecard, risk factors, and formal recommendation.</span></div>', unsafe_allow_html=True)
+        st.markdown('<div style="background:rgba(201,151,74,0.1);border:1px solid rgba(201,151,74,0.3);border-radius:8px;padding:14px 18px;margin-bottom:16px;"><span style="color:#c9974a;font-weight:600;">📄 Bank-Grade PDF Report</span><br><span style="color:rgba(255,255,255,0.5);font-size:0.78rem;">Generates a professional Credit Appraisal Memo with executive summary, financial ratio analysis, weighted risk scorecard, risk factors, analyst narrative, and formal recommendation.</span></div>', unsafe_allow_html=True)
         if st.button("📄 Generate CAM Report", use_container_width=True):
             with st.spinner("Generating PDF..."):
-                fn = f"CAM_{(d['company_name'] or 'Company').replace(' ','_')}.pdf"
-                generate_cam(fn, d["company_name"], d["industry"], d["category"], d["decision"], d["score"], d["confidence"], d["dscr"], d["debt_equity"], d["revenue_growth"], d["icr"], d["ebitda_margin"], d["current_ratio"], d["capacity_risk"], d["capital_risk"], d["character_risk"], d["conditions_risk"], d["reasons"], d["positives"], d["risk_mode"], d["loan_amount"])
-                with open(fn, "rb") as f:
-                    st.download_button("⬇️  Download Credit Appraisal Memo (PDF)", data=f, file_name=fn, mime="application/pdf", use_container_width=True)
+                fn=f"CAM_{(d['company_name'] or 'Company').replace(' ','_')}.pdf"
+                generate_cam(fn,d["company_name"],d["industry"],d["category"],d["decision"],d["score"],d["confidence"],d["dscr"],d["debt_equity"],d["revenue_growth"],d["icr"],d["ebitda_margin"],d["current_ratio"],d["capacity_risk"],d["capital_risk"],d["character_risk"],d["conditions_risk"],d["reasons"],d["positives"],d["risk_mode"],d["loan_amount"])
+                with open(fn,"rb") as f:
+                    st.download_button("⬇️  Download Credit Appraisal Memo (PDF)",data=f,file_name=fn,mime="application/pdf",use_container_width=True)
 
-    # ── TAB 6: Portfolio ──────────────────────────────────────────────
     with tab6:
         st.markdown('<div class="section-title">📊 Portfolio Overview</div>', unsafe_allow_html=True)
-        stats = get_portfolio_stats()
-        if stats["total"] == 0:
-            st.info("No applications saved yet. Run an analysis first!")
+        stats=get_portfolio_stats()
+        if stats["total"]==0:
+            st.info("No applications saved yet.")
         else:
-            c1,c2,c3,c4,c5 = st.columns(5)
-            c1.metric("Total Applications", stats["total"])
-            c2.metric("🟢 Low Risk",    stats["low"])
-            c3.metric("🟡 Medium Risk", stats["medium"])
-            c4.metric("🔴 High Risk",   stats["high"])
-            c5.metric("Avg Risk Score", f"{stats['avg_score']}/100")
-            st.markdown("<br>", unsafe_allow_html=True)
-            cp1, cp2 = st.columns(2)
+            c1,c2,c3,c4,c5=st.columns(5)
+            c1.metric("Total Applications",stats["total"])
+            c2.metric("🟢 Low Risk",stats["low"])
+            c3.metric("🟡 Medium Risk",stats["medium"])
+            c4.metric("🔴 High Risk",stats["high"])
+            c5.metric("Avg Risk Score",f"{stats['avg_score']}/100")
+            st.markdown("<br>",unsafe_allow_html=True)
+            cp1,cp2=st.columns(2)
             with cp1:
-                st.markdown('<div class="section-title">Risk Distribution</div>', unsafe_allow_html=True)
-                fig_pie = go.Figure(go.Pie(labels=["Low Risk","Medium Risk","High Risk"], values=[stats["low"],stats["medium"],stats["high"]], marker_colors=["#22c55e","#f59e0b","#ef4444"], hole=0.5))
-                fig_pie.update_layout(height=260, margin=dict(t=20,b=10,l=10,r=10), paper_bgcolor="rgba(0,0,0,0)", legend=dict(font=dict(color="#9ca3af"),bgcolor="rgba(0,0,0,0)"))
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.markdown('<div class="section-title">Risk Distribution</div>',unsafe_allow_html=True)
+                fig_pie=go.Figure(go.Pie(labels=["Low Risk","Medium Risk","High Risk"],values=[stats["low"],stats["medium"],stats["high"]],marker_colors=["#22c55e","#f59e0b","#ef4444"],hole=0.5))
+                fig_pie.update_layout(height=260,margin=dict(t=20,b=10,l=10,r=10),paper_bgcolor="rgba(0,0,0,0)",legend=dict(font=dict(color="#9ca3af"),bgcolor="rgba(0,0,0,0)"))
+                st.plotly_chart(fig_pie,use_container_width=True)
             with cp2:
-                st.markdown('<div class="section-title">Loan Exposure Summary</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="metric-card" style="margin-bottom:10px"><div class="metric-label">Total Loan Requests</div><div class="metric-value" style="font-size:1.2rem">₹ {stats["total_exposure"]:,.0f}</div></div><div class="metric-card" style="margin-bottom:10px"><div class="metric-label">Total Sanctioned</div><div class="metric-value" style="font-size:1.2rem;color:#22c55e">₹ {stats["total_sanctioned"]:,.0f}</div></div><div class="metric-card"><div class="metric-label">Portfolio Avg DSCR</div><div class="metric-value" style="font-size:1.2rem;color:#c9974a">{stats["avg_dscr"]}x</div></div>', unsafe_allow_html=True)
-            st.markdown('<div class="section-title">Application History</div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Loan Exposure Summary</div>',unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-card" style="margin-bottom:10px"><div class="metric-label">Total Loan Requests</div><div class="metric-value" style="font-size:1.2rem">₹ {stats["total_exposure"]:,.0f}</div></div><div class="metric-card" style="margin-bottom:10px"><div class="metric-label">Total Sanctioned</div><div class="metric-value" style="font-size:1.2rem;color:#22c55e">₹ {stats["total_sanctioned"]:,.0f}</div></div><div class="metric-card"><div class="metric-label">Portfolio Avg DSCR</div><div class="metric-value" style="font-size:1.2rem;color:#c9974a">{stats["avg_dscr"]}x</div></div>',unsafe_allow_html=True)
+            st.markdown('<div class="section-title">Application History</div>',unsafe_allow_html=True)
             for app in get_all_applications():
-                cc = "#22c55e" if app["risk_category"]=="Low Risk" else ("#f59e0b" if app["risk_category"]=="Medium Risk" else "#ef4444")
-                ca, cb = st.columns([5,1])
+                cc="#22c55e" if app["risk_category"]=="Low Risk" else ("#f59e0b" if app["risk_category"]=="Medium Risk" else "#ef4444")
+                ca,cb=st.columns([5,1])
                 with ca:
-                    st.markdown(f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-left:3px solid {cc};border-radius:6px;padding:10px 16px;margin-bottom:6px;"><span style="color:#fff;font-weight:600">{app["company_name"]}</span> <span style="color:#9ca3af;font-size:0.78rem">{app["industry"]} · {app["created_at"]}</span><br><span style="color:{cc};font-size:0.82rem;font-weight:600">{app["risk_category"]}</span> <span style="color:#9ca3af;font-size:0.78rem">Score: {app["risk_score"]}/100 · DSCR: {app["dscr"]}x · D/E: {app["debt_equity"]}x · Rate: {app["interest_rate"]}%</span></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-left:3px solid {cc};border-radius:6px;padding:10px 16px;margin-bottom:6px;"><span style="color:#fff;font-weight:600">{app["company_name"]}</span> <span style="color:#9ca3af;font-size:0.78rem">{app["industry"]} · {app["created_at"]}</span><br><span style="color:{cc};font-size:0.82rem;font-weight:600">{app["risk_category"]}</span> <span style="color:#9ca3af;font-size:0.78rem">Score: {app["risk_score"]}/100 · DSCR: {app["dscr"]}x · D/E: {app["debt_equity"]}x · Rate: {app["interest_rate"]}%</span></div>',unsafe_allow_html=True)
                 with cb:
-                    if st.button("🗑️", key=f"del_{app['id']}"):
+                    if st.button("🗑️",key=f"del_{app['id']}"):
                         delete_application(app["id"]); st.rerun()
 
-    # ── TAB 7: ML Explainability ──────────────────────────────────────
     with tab7:
-        ml = d.get("ml_result")
+        ml=d.get("ml_result")
         if ml is None:
-            st.warning("ML model could not run. Check scikit-learn and shap are installed.")
+            st.warning("ML model could not run.")
         else:
-            st.markdown('<div class="section-title">🤖 ML Model vs Rule-Based Engine</div>', unsafe_allow_html=True)
-            mc = "#22c55e" if ml["ml_category"]=="Low Risk" else ("#f59e0b" if ml["ml_category"]=="Medium Risk" else "#ef4444")
-            rc2 = "#22c55e" if d["category"]=="Low Risk" else ("#f59e0b" if d["category"]=="Medium Risk" else "#ef4444")
-            m1, m2 = st.columns(2)
-            with m1: st.markdown(f'<div class="metric-card"><div class="metric-label">Rule-Based Engine</div><div class="metric-value" style="color:{rc2};font-size:1.2rem">{d["category"]}</div><div class="metric-sub">Score: {d["score"]}/100 · Confidence: {d["confidence"]}%</div></div>', unsafe_allow_html=True)
-            with m2: st.markdown(f'<div class="metric-card"><div class="metric-label">ML Model (Random Forest)</div><div class="metric-value" style="color:{mc};font-size:1.2rem">{ml["ml_category"]}</div><div class="metric-sub">Confidence: {ml["ml_confidence"]}%</div></div>', unsafe_allow_html=True)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<div class="section-title">Prediction Probability Distribution</div>', unsafe_allow_html=True)
-            fig_p = go.Figure()
-            for label, pct in ml["probabilities"].items():
-                pc = {"Low Risk":"#22c55e","Medium Risk":"#f59e0b","High Risk":"#ef4444"}[label]
-                fig_p.add_trace(go.Bar(name=label, x=[pct], y=["Probability"], orientation="h", marker_color=pc, text=f"{pct}%", textposition="inside", textfont=dict(color="white",size=12)))
-            fig_p.update_layout(barmode="stack", height=120, margin=dict(t=10,b=10,l=10,r=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=True, legend=dict(font=dict(color="#9ca3af"),bgcolor="rgba(0,0,0,0)",orientation="h"), xaxis=dict(range=[0,100]), yaxis=dict(color="rgba(255,255,255,0.3)"))
-            st.plotly_chart(fig_p, use_container_width=True)
-
-            st.markdown('<div class="section-title">🔍 SHAP — Why Did the Model Decide This?</div>', unsafe_allow_html=True)
-            sf = ml["shap_features"][:10]; sv = ml["shap_values"][:10]; rv = ml["raw_values"][:10]
-            fl = [f'{FEATURE_LABELS.get(sf[i],sf[i])} = {rv[i]}' for i in range(len(sf))]
-            bcs = ["#ef4444" if v>0 else "#22c55e" for v in sv]
-            fig_shap = go.Figure(go.Bar(x=sv, y=fl, orientation="h", marker_color=bcs, text=[f"+{v:.3f}" if v>0 else f"{v:.3f}" for v in sv], textposition="outside", textfont=dict(color="white",size=10)))
-            fig_shap.add_vline(x=0, line_color="rgba(255,255,255,0.3)", line_width=1)
-            fig_shap.update_layout(height=380, margin=dict(t=20,b=20,l=20,r=60), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(color="rgba(255,255,255,0.4)",gridcolor="rgba(255,255,255,0.06)",title="SHAP Value"), yaxis=dict(color="rgba(255,255,255,0.7)",tickfont=dict(size=9)))
-            st.plotly_chart(fig_shap, use_container_width=True)
-
-            st.markdown('<div class="section-title">📊 Global Feature Importance</div>', unsafe_allow_html=True)
-            fi = get_feature_importance(); fil = list(fi.keys())[:8]; fiv = [round(v*100,1) for v in list(fi.values())[:8]]
-            fig_fi = go.Figure(go.Bar(x=fiv, y=fil, orientation="h", marker_color="#c9974a", text=[f"{v}%" for v in fiv], textposition="outside", textfont=dict(color="white",size=10)))
-            fig_fi.update_layout(height=320, margin=dict(t=10,b=10,l=20,r=60), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(color="rgba(255,255,255,0.4)"), yaxis=dict(color="rgba(255,255,255,0.7)",tickfont=dict(size=9),autorange="reversed"))
-            st.plotly_chart(fig_fi, use_container_width=True)
-
+            st.markdown('<div class="section-title">🤖 ML Model vs Rule-Based Engine</div>',unsafe_allow_html=True)
+            mc="#22c55e" if ml["ml_category"]=="Low Risk" else ("#f59e0b" if ml["ml_category"]=="Medium Risk" else "#ef4444")
+            rc2="#22c55e" if d["category"]=="Low Risk" else ("#f59e0b" if d["category"]=="Medium Risk" else "#ef4444")
+            m1,m2=st.columns(2)
+            with m1: st.markdown(f'<div class="metric-card"><div class="metric-label">Rule-Based Engine</div><div class="metric-value" style="color:{rc2};font-size:1.2rem">{d["category"]}</div><div class="metric-sub">Score: {d["score"]}/100 · Confidence: {d["confidence"]}%</div></div>',unsafe_allow_html=True)
+            with m2: st.markdown(f'<div class="metric-card"><div class="metric-label">ML Model (Random Forest)</div><div class="metric-value" style="color:{mc};font-size:1.2rem">{ml["ml_category"]}</div><div class="metric-sub">Confidence: {ml["ml_confidence"]}%</div></div>',unsafe_allow_html=True)
+            st.markdown("<br>",unsafe_allow_html=True)
+            st.markdown('<div class="section-title">Prediction Probability Distribution</div>',unsafe_allow_html=True)
+            fig_p=go.Figure()
+            for label,pct in ml["probabilities"].items():
+                pc={"Low Risk":"#22c55e","Medium Risk":"#f59e0b","High Risk":"#ef4444"}[label]
+                fig_p.add_trace(go.Bar(name=label,x=[pct],y=["Probability"],orientation="h",marker_color=pc,text=f"{pct}%",textposition="inside",textfont=dict(color="white",size=12)))
+            fig_p.update_layout(barmode="stack",height=120,margin=dict(t=10,b=10,l=10,r=10),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",showlegend=True,legend=dict(font=dict(color="#9ca3af"),bgcolor="rgba(0,0,0,0)",orientation="h"),xaxis=dict(range=[0,100]),yaxis=dict(color="rgba(255,255,255,0.3)"))
+            st.plotly_chart(fig_p,use_container_width=True)
+            st.markdown('<div class="section-title">🔍 SHAP — Why Did the Model Decide This?</div>',unsafe_allow_html=True)
+            sf=ml["shap_features"][:10]; sv=ml["shap_values"][:10]; rv=ml["raw_values"][:10]
+            fl=[f'{FEATURE_LABELS.get(sf[i],sf[i])} = {rv[i]}' for i in range(len(sf))]
+            bcs=["#ef4444" if v>0 else "#22c55e" for v in sv]
+            fig_shap=go.Figure(go.Bar(x=sv,y=fl,orientation="h",marker_color=bcs,text=[f"+{v:.3f}" if v>0 else f"{v:.3f}" for v in sv],textposition="outside",textfont=dict(color="white",size=10)))
+            fig_shap.add_vline(x=0,line_color="rgba(255,255,255,0.3)",line_width=1)
+            fig_shap.update_layout(height=380,margin=dict(t=20,b=20,l=20,r=60),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",xaxis=dict(color="rgba(255,255,255,0.4)",gridcolor="rgba(255,255,255,0.06)",title="SHAP Value (Impact on Risk Score)"),yaxis=dict(color="rgba(255,255,255,0.7)",tickfont=dict(size=9)))
+            st.plotly_chart(fig_shap,use_container_width=True)
+            st.markdown('<div class="section-title">📊 Global Feature Importance (Trained Model)</div>',unsafe_allow_html=True)
+            fi=get_feature_importance(); fil=list(fi.keys())[:8]; fiv=[round(v*100,1) for v in list(fi.values())[:8]]
+            fig_fi=go.Figure(go.Bar(x=fiv,y=fil,orientation="h",marker_color="#c9974a",text=[f"{v}%" for v in fiv],textposition="outside",textfont=dict(color="white",size=10)))
+            fig_fi.update_layout(height=320,margin=dict(t=10,b=10,l=20,r=60),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",xaxis=dict(color="rgba(255,255,255,0.4)"),yaxis=dict(color="rgba(255,255,255,0.7)",tickfont=dict(size=9),autorange="reversed"))
+            st.plotly_chart(fig_fi,use_container_width=True)
             if ml.get("top_risk") or ml.get("top_positive"):
-                tr, tp = st.columns(2)
+                tr,tp=st.columns(2)
                 with tr:
-                    st.markdown('<div class="section-title">⚠️ Top Risk Drivers (SHAP)</div>', unsafe_allow_html=True)
-                    for feat, impact, val in ml["top_risk"]:
-                        st.markdown(f'<div class="risk-pill-red">📌 {feat} = {val}  (+{impact} risk)</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">⚠️ Top Risk Drivers (SHAP)</div>',unsafe_allow_html=True)
+                    for feat,impact,val in ml["top_risk"]:
+                        st.markdown(f'<div class="risk-pill-red">📌 {feat} = {val}  (+{impact} risk)</div>',unsafe_allow_html=True)
                 with tp:
-                    st.markdown('<div class="section-title">✅ Risk Reducers (SHAP)</div>', unsafe_allow_html=True)
-                    for feat, impact, val in ml["top_positive"]:
-                        st.markdown(f'<div class="risk-pill-green">✅ {feat} = {val}  (-{impact} risk)</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">✅ Risk Reducers (SHAP)</div>',unsafe_allow_html=True)
+                    for feat,impact,val in ml["top_positive"]:
+                        st.markdown(f'<div class="risk-pill-green">✅ {feat} = {val}  (-{impact} risk)</div>',unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════════════════════════════
-    # TAB 8 — RESEARCH AGENT ✅
-    # ════════════════════════════════════════════════════════════════════
     with tab8:
         st.markdown("### 🔍 Research Agent — Digital Credit Manager")
         st.markdown("Automatically searches **company news**, **promoter background**, **legal/MCA filings**, and **sector headwinds** — then adjusts risk score.")
-
-        rc1, rc2, rc3 = st.columns([2,1,1])
-        with rc1: research_company  = st.text_input("Company to Research", value=d["company_name"], key="rc_input")
-        with rc2: research_industry = st.selectbox("Industry", list(INDUSTRY_RISK_MAP.keys()), index=list(INDUSTRY_RISK_MAP.keys()).index(d["industry"]) if d["industry"] in INDUSTRY_RISK_MAP else 0, key="ri_input")
-        with rc3: research_api_key  = st.text_input("NewsAPI Key (Optional)", type="password", placeholder="Free at newsapi.org", key="rk_input")
-
-        if st.button("🔍 Run Web Research", type="primary", use_container_width=True, key="run_research"):
-            with st.spinner(f"🌐 Researching {research_company}... Crawling news, legal, sector data..."):
-                research = run_research_agent(company_name=research_company, industry=research_industry, newsapi_key=research_api_key)
-
-            rclr  = {"High":"#7F1D1D","Medium":"#451A03","Low":"#052E16"}.get(research["research_risk"],"#1e293b")
-            rbrd  = {"High":"#EF4444","Medium":"#F59E0B","Low":"#22C55E"}.get(research["research_risk"],"#334155")
-            adj   = research["score_adjustment"]
-            ac    = "#EF4444" if adj>0 else "#22C55E"
-            asign = "+" if adj>=0 else ""
-
-            st.markdown(f'<div style="background:{rclr};border:1px solid {rbrd};border-radius:10px;padding:20px;margin:12px 0;"><h3 style="color:white;margin:0;">{research["risk_emoji"]} Research Risk: {research["research_risk"]}</h3><p style="color:#CBD5E1;margin:8px 0 0 0;">{research["summary"]}</p><p style="color:#94A3B8;font-size:0.8em;margin:6px 0 0 0;">Score Adjustment: <b style="color:{ac};">{asign}{adj} points</b> · {research["timestamp"]}</p></div>', unsafe_allow_html=True)
-
-            c1,c2,c3,c4 = st.columns(4)
-            c1.metric("📰 Articles", research["total_articles"])
-            c2.metric("🔴 High Risk", research["high_risk_count"])
-            c3.metric("🟡 Medium",   research["medium_risk_count"])
-            c4.metric("✅ Positive", research["positive_count"])
-
+        rc1,rc2,rc3=st.columns([2,1,1])
+        with rc1: research_company=st.text_input("Company to Research",value=d["company_name"],key="rc_input")
+        with rc2: research_industry=st.selectbox("Industry",list(INDUSTRY_RISK_MAP.keys()),index=list(INDUSTRY_RISK_MAP.keys()).index(d["industry"]) if d["industry"] in INDUSTRY_RISK_MAP else 0,key="ri_input")
+        with rc3: research_api_key=st.text_input("NewsAPI Key (Optional)",type="password",placeholder="Free at newsapi.org",key="rk_input")
+        if st.button("🔍 Run Web Research",type="primary",use_container_width=True,key="run_research"):
+            with st.spinner(f"🌐 Researching {research_company}..."):
+                research=run_research_agent(company_name=research_company,industry=research_industry,newsapi_key=research_api_key)
+            rclr={"High":"#7F1D1D","Medium":"#451A03","Low":"#052E16"}.get(research["research_risk"],"#1e293b")
+            rbrd={"High":"#EF4444","Medium":"#F59E0B","Low":"#22C55E"}.get(research["research_risk"],"#334155")
+            adj=research["score_adjustment"]; ac="#EF4444" if adj>0 else "#22C55E"; asign="+" if adj>=0 else ""
+            st.markdown(f'<div style="background:{rclr};border:1px solid {rbrd};border-radius:10px;padding:20px;margin:12px 0;"><h3 style="color:white;margin:0;">{research["risk_emoji"]} Research Risk: {research["research_risk"]}</h3><p style="color:#CBD5E1;margin:8px 0 0 0;">{research["summary"]}</p><p style="color:#94A3B8;font-size:0.8em;margin:6px 0 0 0;">Score Adjustment: <b style="color:{ac};">{asign}{adj} points</b> · {research["timestamp"]}</p></div>',unsafe_allow_html=True)
+            c1,c2,c3,c4=st.columns(4)
+            c1.metric("📰 Articles",research["total_articles"]); c2.metric("🔴 High Risk",research["high_risk_count"]); c3.metric("🟡 Medium",research["medium_risk_count"]); c4.metric("✅ Positive",research["positive_count"])
             if research["red_flags"]:
                 st.markdown("#### 🚨 Red Flags")
                 for flag in research["red_flags"]: st.error(flag)
-
-            st.markdown("---")
-            st.markdown("#### 📰 Company News")
+            st.markdown("---"); st.markdown("#### 📰 Company News")
             if research["findings"]:
                 for item in research["findings"]:
-                    s = item["sentiment"]; rl = item["risk_level"]
-                    bc = {"high":"#EF4444","medium":"#F59E0B","positive":"#22C55E","low":"#334155"}.get(rl,"#334155")
-                    lh = f'<a href="{item["link"]}" target="_blank" style="color:#C9974A;font-size:0.75em;">Read →</a>' if item.get("link") else ""
-                    st.markdown(f'<div style="background:#1e293b;border-left:4px solid {bc};border-radius:6px;padding:12px 16px;margin:8px 0;"><span style="color:white;font-size:0.9em;">{s["emoji"]} {item["title"]}</span><span style="color:#94A3B8;font-size:0.75em;margin-left:12px;">{item["date"]}</span><br><span style="background:#0f172a;color:#94A3B8;font-size:0.72em;padding:2px 8px;border-radius:4px;">{item["source"]}</span> <span style="background:#0f172a;color:{bc};font-size:0.72em;padding:2px 8px;border-radius:4px;">{rl.upper()}</span> <span style="color:#64748b;font-size:0.72em;">{s["label"]} ({s["compound"]})</span> {lh}</div>', unsafe_allow_html=True)
+                    s=item["sentiment"]; rl=item["risk_level"]
+                    bc={"high":"#EF4444","medium":"#F59E0B","positive":"#22C55E","low":"#334155"}.get(rl,"#334155")
+                    lh=f'<a href="{item["link"]}" target="_blank" style="color:#C9974A;font-size:0.75em;">Read →</a>' if item.get("link") else ""
+                    st.markdown(f'<div style="background:#1e293b;border-left:4px solid {bc};border-radius:6px;padding:12px 16px;margin:8px 0;"><span style="color:white;font-size:0.9em;">{s["emoji"]} {item["title"]}</span><span style="color:#94A3B8;font-size:0.75em;margin-left:12px;">{item["date"]}</span><br><span style="background:#0f172a;color:#94A3B8;font-size:0.72em;padding:2px 8px;border-radius:4px;">{item["source"]}</span> <span style="background:#0f172a;color:{bc};font-size:0.72em;padding:2px 8px;border-radius:4px;">{rl.upper()}</span> <span style="color:#64748b;font-size:0.72em;">{s["label"]} ({s["compound"]})</span> {lh}</div>',unsafe_allow_html=True)
             else:
                 st.info("No news found. Clean web presence — positive signal.")
-
             if research["sector_news"]:
-                st.markdown("---")
-                st.markdown(f"#### 🏭 Sector & Regulatory News — {research_industry}")
+                st.markdown("---"); st.markdown(f"#### 🏭 Sector & Regulatory News — {research_industry}")
                 for item in research["sector_news"][:6]:
-                    s = item["sentiment"]
-                    st.markdown(f'<div style="background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:10px 14px;margin:6px 0;"><span style="color:#CBD5E1;font-size:0.85em;">{s["emoji"]} {item["title"]}</span> <span style="color:#475569;font-size:0.72em;">{item["source"]} · {item["date"]}</span></div>', unsafe_allow_html=True)
-
+                    s=item["sentiment"]
+                    st.markdown(f'<div style="background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:10px 14px;margin:6px 0;"><span style="color:#CBD5E1;font-size:0.85em;">{s["emoji"]} {item["title"]}</span> <span style="color:#475569;font-size:0.72em;">{item["source"]} · {item["date"]}</span></div>',unsafe_allow_html=True)
             st.markdown("---")
-            if adj != 0:
-                direction = "increases" if adj>0 else "decreases"
-                st.markdown(f'<div style="background:#1e293b;border:1px solid #334155;border-radius:8px;padding:16px;text-align:center;"><p style="color:#94A3B8;margin:0 0 4px 0;font-size:0.85em;">RESEARCH IMPACT ON RISK SCORE</p><h2 style="color:{ac};margin:0;">{asign}{adj} points</h2><p style="color:#64748B;margin:6px 0 0 0;font-size:0.82em;">Web research {direction} overall risk score by {abs(adj)} points.</p></div>', unsafe_allow_html=True)
+            if adj!=0:
+                direction="increases" if adj>0 else "decreases"
+                st.markdown(f'<div style="background:#1e293b;border:1px solid #334155;border-radius:8px;padding:16px;text-align:center;"><p style="color:#94A3B8;margin:0 0 4px 0;font-size:0.85em;">RESEARCH IMPACT ON RISK SCORE</p><h2 style="color:{ac};margin:0;">{asign}{adj} points</h2><p style="color:#64748B;margin:6px 0 0 0;font-size:0.82em;">Web research {direction} overall risk score by {abs(adj)} points.</p></div>',unsafe_allow_html=True)
             else:
                 st.success("✅ Neutral web presence — no risk score adjustment needed.")
         else:
-            st.markdown('<div style="background:#1e293b;border:1px dashed #334155;border-radius:10px;padding:40px;text-align:center;margin-top:20px;"><h3 style="color:#64748B;">🔍 Research Not Run Yet</h3><p style="color:#475569;">Click <b style="color:#c9974a">"Run Web Research"</b> to automatically search:<br><br>📰 Company news & promoter background<br>⚖️ Legal disputes & MCA filings<br>🏭 Sector headwinds & RBI regulations<br>📊 Sentiment analysis on all findings</p></div>', unsafe_allow_html=True)
+            st.markdown('<div style="background:#1e293b;border:1px dashed #334155;border-radius:10px;padding:40px;text-align:center;margin-top:20px;"><h3 style="color:#64748B;">🔍 Research Not Run Yet</h3><p style="color:#475569;">Click <b style="color:#c9974a">"Run Web Research"</b> to automatically search:<br><br>📰 Company news & promoter background<br>⚖️ Legal disputes & MCA filings<br>🏭 Sector headwinds & RBI regulations<br>📊 Sentiment analysis on all findings</p></div>',unsafe_allow_html=True)
 
 else:
-    st.markdown('<div style="text-align:center;padding:60px 20px;"><div style="font-size:3.5rem;margin-bottom:16px">🏦</div><div style="color:rgba(255,255,255,0.6);font-size:1.05rem;margin-bottom:8px">Enter company details in the sidebar and click <b style="color:#c9974a">Run Credit Analysis</b></div><div style="color:rgba(255,255,255,0.3);font-size:0.82rem">6 Financial Ratios  •  4-Component Risk Model  •  Early Warning Signals  •  Stress Testing  •  CAM PDF  •  Research Agent</div></div>', unsafe_allow_html=True)
+    st.markdown('<div style="text-align:center;padding:60px 20px;"><div style="font-size:3.5rem;margin-bottom:16px">🏦</div><div style="color:rgba(255,255,255,0.6);font-size:1.05rem;margin-bottom:8px">Enter company details in the sidebar and click <b style="color:#c9974a">Run Credit Analysis</b></div><div style="color:rgba(255,255,255,0.3);font-size:0.82rem">6 Financial Ratios  •  4-Component Risk Model  •  Early Warning Signals  •  Stress Testing  •  CAM PDF  •  Research Agent</div></div>',unsafe_allow_html=True)
