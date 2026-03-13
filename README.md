@@ -10,6 +10,15 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ---
+<img width="1916" height="914" alt="Screenshot 2026-03-09 140002" src="https://github.com/user-attachments/assets/65029c31-2225-4b13-8a8c-8c9728ba9bde" />
+<img width="1640" height="899" alt="Screenshot 2026-03-09 140024" src="https://github.com/user-attachments/assets/07bbc18f-d44c-474d-9408-0050f34ebf5a" />
+<img width="1516" height="841" alt="Screenshot 2026-03-09 140045" src="https://github.com/user-attachments/assets/96379960-a0ef-427f-b642-19b3b6d592dd" />
+<img width="1605" height="855" alt="Screenshot 2026-03-09 140111" src="https://github.com/user-attachments/assets/e8fc255e-d835-412e-a6c2-8f1166c97934" />
+<img width="1556" height="871" alt="Screenshot 2026-03-09 140128" src="https://github.com/user-attachments/assets/e04b4720-bb57-4659-9e44-38a645b28684" />
+<img width="1612" height="855" alt="Screenshot 2026-03-09 140142" src="https://github.com/user-attachments/assets/ecd6529a-ba21-4483-9094-77131d706318" />
+<img width="1546" height="846" alt="Screenshot 2026-03-09 140220" src="https://github.com/user-attachments/assets/5bd57e18-36d9-4576-bf1c-f91866804330" />
+<img width="1613" height="853" alt="Screenshot 2026-03-09 140234" src="https://github.com/user-attachments/assets/5b1de54f-a33f-4f4e-82a5-66c25a9beaa9" />
+<img width="1534" height="635" alt="Screenshot 2026-03-09 140241" src="https://github.com/user-attachments/assets/62012792-19c4-4f9a-a70b-96580279ee83" />
 
 ## 🎯 Problem Statement
 
